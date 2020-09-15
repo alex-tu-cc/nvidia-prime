@@ -57,6 +57,7 @@ class Switcher(object):
         self._old_blacklist_file = '/etc/modprobe.d/blacklist-nvidia.conf'
         self._blacklist_file = '/lib/modprobe.d/blacklist-nvidia.conf'
         self._nvidia_kms_file = '/lib/modprobe.d/nvidia-kms.conf'
+        self._nvidia_runtimepm_file = '/lib/modprobe.d/nvidia-runtimepm.conf'
         self._gdm_conf_file = '/etc/gdm3/custom.conf'
         self._udev_rule_file = '/lib/udev/rules.d/50-pm-nvidia.rules'
         self._old_udev_rule_file = '/lib/udev/rules.d/80-pm-nvidia.rules'
@@ -112,6 +113,25 @@ class Switcher(object):
 
         return status
 
+    def _supports_runtimepm(self):
+        return os.path.isfile('/run/nvidia_runtimepm_supported')
+
+    def _is_runtimepm_enabled(self):
+        return os.path.isfile('/run/nvidia_runtimepm_enabled')
+
+    def _enable_runtimepm(self):
+        print('Writing %s' % self._nvidia_runtimepm_file)
+        pm_fd = open(self._nvidia_runtimepm_file, 'w')
+        pm_fd.write('options nvidia \"NVreg_DynamicPowerManagement=0x02\"\n')
+        pm_fd.close()
+
+    def _disable_runtimepm(self):
+        try:
+            print('Deleting %s' % self._nvidia_runtimepm_file)
+            os.unlink(self._nvidia_runtimepm_file)
+        except:
+            pass
+
     def enable_profile(self, profile):
         current_profile = self._get_profile()
 
@@ -131,6 +151,9 @@ class Switcher(object):
             self._enable_nvidia()
         elif profile == "on-demand":
             self._disable_nvidia(keep_nvidia_modules=True)
+            if self._supports_runtimepm():
+                self._enable_runtimepm()
+                self._enable_kms()
         else:
             # Make sure that the installed packages support PRIME
             #if not self._supports_prime():
@@ -143,17 +166,17 @@ class Switcher(object):
 
         return True
 
-    def _create_pm_udev_rule(self, keep_nvidia=True):
-        udev_rule_stub = '''# Remove NVIDIA USB xHCI Host Controller devices, if present
+    def _create_pm_udev_rule(self, keep_nvidia=True, with_workaround=False):
+        workaround = '''# Remove NVIDIA USB xHCI Host Controller devices, if present
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x0c0330", ATTR{remove}="1"
 
 # Remove NVIDIA USB Type-C UCSI devices, if present
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x0c8000", ATTR{remove}="1"
 
 # Remove NVIDIA Audio devices, if present
-ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x040300", ATTR{remove}="1"
-%s
-# Enable runtime PM for NVIDIA VGA/3D controller devices on driver bind
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x040300", ATTR{remove}="1"\n'''
+
+        udev_rule_stub = '''%s%s# Enable runtime PM for NVIDIA VGA/3D controller devices on driver bind
 ACTION=="bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", TEST=="power/control", ATTR{power/control}="auto"
 ACTION=="bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", TEST=="power/control", ATTR{power/control}="auto"
 
@@ -161,16 +184,21 @@ ACTION=="bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200
 ACTION=="unbind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", TEST=="power/control", ATTR{power/control}="on"
 ACTION=="unbind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", TEST=="power/control", ATTR{power/control}="on"'''
 
-        disable_nvidia_stub = '''
-# Remove NVIDIA VGA/3D controller
+        disable_nvidia_stub = '''# Remove NVIDIA VGA/3D controller
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{remove}="1"
-ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x038000", ATTR{remove}="1"
-'''
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", ATTR{remove}="1"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x038000", ATTR{remove}="1"\n'''
+
+        if with_workaround:
+            workaround_stub = workaround
+        else:
+            workaround_stub = ''
+
         if keep_nvidia or not self._has_intel_gpu():
             complete_stub = ''
         else:
             complete_stub = disable_nvidia_stub
-        udev_rule = udev_rule_stub % (complete_stub)
+        udev_rule = udev_rule_stub % (complete_stub, workaround_stub)
 
         try:
             os.unlink(self._old_udev_rule_file)
@@ -208,6 +236,8 @@ ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x038000"
         except:
             pass
 
+        self._disable_runtimepm()
+
         try:
             os.unlink(self._blacklist_file)
         except:
@@ -237,15 +267,21 @@ alias nvidia-modeset off'''
         blacklist_fd.write(blacklist_text)
         blacklist_fd.close()
 
-    def _enable_kms(self):
+    def _write_kms_settings(self, value):
         # This is actually disabled now, but it can be enabled
         # by users with a simple change.
         kms_text = '''# This file was generated by nvidia-prime
 # Set value to 1 to enable modesetting
-options nvidia-drm modeset=0'''
+options nvidia-drm modeset=%d''' % (value)
         kms_fd = open(self._nvidia_kms_file, 'w')
         kms_fd.write(kms_text)
         kms_fd.close()
+
+    def _enable_kms(self):
+        self._write_kms_settings(1)
+
+    def _disable_kms(self):
+        self._write_kms_settings(0)
 
     def _add_boot_params(self, pattern, path, params):
         it = 0
