@@ -1,9 +1,9 @@
-nvidia-prime (0.8.14oem1) UNRELEASED; urgency=medium
+nvidia-prime (0.8.14oem1) focal; urgency=medium
 
   [ Alex Tu ]
-  * merge https://github.com/tseliot/nvidia-prime/pull/12 for oem schedule. 
+  * merge https://github.com/tseliot/nvidia-prime/pull/12 for oem schedule.
 
- -- Alberto Milone <alberto.milone@canonical.com>  Mon, 10 Aug 2020 16:19:56 +0200
+ -- Alex Tu <alex.tu@canonical.com>  Tue, 15 Sep 2020 13:35:23 +0800
 
 nvidia-prime (0.8.14) focal; urgency=medium
 
